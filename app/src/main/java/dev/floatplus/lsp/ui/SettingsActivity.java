@@ -93,7 +93,7 @@ public final class SettingsActivity extends Activity {
 
         section("脚本");
         Button manageScripts = new Button(this);
-        manageScripts.setText("管理本地 sh 脚本");
+        manageScripts.setText("管理本地脚本");
         manageScripts.setOnClickListener(v -> startActivity(new Intent(this, ScriptLibraryActivity.class)));
         content.addView(manageScripts, matchWrap());
         TextView scriptHint = text("手势和菜单入口均可选择脚本；运行时通过 su 获取 root。脚本执行结果会显示在这里。", 13, false);
@@ -365,9 +365,9 @@ public final class SettingsActivity extends Activity {
         java.util.List<ScriptStore.Script> scripts = ScriptStore.list(this);
         if (scripts.isEmpty()) {
             new AlertDialog.Builder(this).setTitle("还没有脚本")
-                    .setMessage("先从手机导入 .sh 脚本，再把它分配给此入口。")
+                    .setMessage("先在脚本库里粘贴或新建脚本，再把它分配给此入口。")
                     .setNegativeButton("取消", null)
-                    .setPositiveButton("导入脚本", (dialog, which) ->
+                    .setPositiveButton("管理脚本", (dialog, which) ->
                             startActivity(new Intent(this, ScriptLibraryActivity.class))).show();
             return;
         }
