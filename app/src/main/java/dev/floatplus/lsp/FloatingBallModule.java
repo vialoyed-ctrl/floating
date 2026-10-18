@@ -135,6 +135,7 @@ public final class FloatingBallModule implements IXposedHookLoadPackage {
                     readConfig(context);
                     float scale = getPercent(ConfigStore.BALL_SIZE_PERCENT, ConfigStore.DEFAULT_SIZE_PERCENT) / 100f;
                     WindowManager.LayoutParams layoutParams = (WindowManager.LayoutParams) param.args[1];
+                    promoteBallWindowToTop(context, layoutParams);
                     int[] originalSize;
                     synchronized (ORIGINAL_WINDOW_SIZES) {
                         originalSize = ORIGINAL_WINDOW_SIZES.get(layoutParams);
@@ -360,6 +361,28 @@ public final class FloatingBallModule implements IXposedHookLoadPackage {
     private static int scaleDimension(int original, float scale) {
         return original > 0 ? Math.round(original * scale) : original;
     }
+
+    /** Put the ColorOS ball above application windows when its process has system-window access. */
+    private static void promoteBallWindowToTop(Context context, WindowManager.LayoutParams params) {
+        if (params.type == WindowManager.LayoutParams.TYPE_SYSTEM_OVERLAY) {
+            params.flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+            return;
+        }
+
+        final String permission = "android.permission.INTERNAL_SYSTEM_WINDOW";
+        if (context.checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
+            log("System overlay permission unavailable; keeping native ball window type=" + params.type, null);
+            return;
+        }
+
+        int originalType = params.type;
+        params.type = WindowManager.LayoutParams.TYPE_SYSTEM_OVERLAY;
+        // Keep the ball touchable while preventing it from taking keyboard/keyguard focus.
+        params.flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+        log("Promoted ball window type " + originalType + " -> " + params.type
+                + " (system overlay layer)", null);
+    }
+
     private static boolean setSize(View view, Context context, int widthDp, int heightDp) {
         ViewGroup.LayoutParams params = view.getLayoutParams();
         int width = dp(context, widthDp);
