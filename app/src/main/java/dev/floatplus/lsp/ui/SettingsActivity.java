@@ -1,10 +1,12 @@
 package dev.floatplus.lsp.ui;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.os.Bundle;
+import android.text.InputType;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
@@ -15,10 +17,14 @@ import android.widget.RadioButton;
 import android.widget.RadioGroup;
 import android.widget.SeekBar;
 import android.widget.ScrollView;
+import android.widget.Spinner;
+import android.widget.ArrayAdapter;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import dev.floatplus.lsp.config.ConfigStore;
 import dev.floatplus.lsp.config.ConfigProvider;
+import dev.floatplus.lsp.config.ScriptStore;
 import dev.floatplus.lsp.appearance.AssistiveTouchDrawable;
 import dev.floatplus.lsp.util.FloatingBallRestarter;
 
@@ -26,6 +32,7 @@ public final class SettingsActivity extends Activity {
     private static final int PICK_REQUEST = 100;
     private LinearLayout content;
     private ImageView ballPreview;
+    private TextView scriptStatusView;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -44,6 +51,10 @@ public final class SettingsActivity extends Activity {
     protected void onResume() {
         super.onResume();
         ConfigProvider.warm(this);
+        if (scriptStatusView != null) {
+            String result = ConfigStore.getLastScriptResult(this);
+            scriptStatusView.setText(result.isEmpty() ? "暂无脚本运行记录" : result);
+        }
     }
 
     private void buildUi() {
@@ -52,6 +63,9 @@ public final class SettingsActivity extends Activity {
         TextView intro = text("为系统悬浮球配置应用启动手势和菜单入口。未配置的手势继续使用系统原动作。", 15, false);
         intro.setPadding(0, dp(8), 0, dp(16));
         content.addView(intro, matchWrap());
+
+        section("配置模式");
+        addProfileControls();
 
         section("悬浮球外观");
         addBallStyleControl();
@@ -74,11 +88,117 @@ public final class SettingsActivity extends Activity {
         hint.setPadding(0, 0, 0, dp(8));
         content.addView(hint, matchWrap());
         for (int i = 1; i <= 5; i++) {
-            addAppRow("菜单应用 " + i, ConfigStore.menuKey(i));
+            addAppRow("菜单入口 " + i, ConfigStore.menuKey(i));
         }
+
+        section("脚本");
+        Button manageScripts = new Button(this);
+        manageScripts.setText("管理本地 sh 脚本");
+        manageScripts.setOnClickListener(v -> startActivity(new Intent(this, ScriptLibraryActivity.class)));
+        content.addView(manageScripts, matchWrap());
+        TextView scriptHint = text("手势和菜单入口均可选择脚本；运行时通过 su 获取 root。脚本执行结果会显示在这里。", 13, false);
+        scriptHint.setPadding(0, dp(4), 0, dp(4));
+        content.addView(scriptHint, matchWrap());
+        scriptStatusView = text("暂无脚本运行记录", 13, false);
+        scriptStatusView.setTextColor(Color.DKGRAY);
+        content.addView(scriptStatusView, matchWrap());
 
         section("启用说明");
         content.addView(text("安装 APK 后，在 LSPosed 中启用“悬浮球增强”，确认作用域包含 com.coloros.floatassistant，再重启悬浮球进程或设备。", 14, false), matchWrap());
+    }
+
+    private void addProfileControls() {
+        java.util.List<ConfigStore.Profile> profiles = ConfigStore.getProfiles(this);
+        Spinner spinner = new Spinner(this);
+        ArrayAdapter<ConfigStore.Profile> adapter = new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_item, profiles);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        spinner.setAdapter(adapter);
+        String activeId = ConfigStore.getActiveProfileId(this);
+        int selected = 0;
+        for (int i = 0; i < profiles.size(); i++) if (profiles.get(i).id.equals(activeId)) selected = i;
+        spinner.setSelection(selected);
+        spinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) {
+                ConfigStore.Profile profile = profiles.get(position);
+                if (profile.id.equals(ConfigStore.getActiveProfileId(SettingsActivity.this))) return;
+                ConfigStore.setActiveProfile(SettingsActivity.this, profile.id);
+                buildUiRefresh();
+                restartAfterProfileChange();
+            }
+            @Override public void onNothingSelected(android.widget.AdapterView<?> parent) {}
+        });
+        content.addView(spinner, matchWrap());
+
+        LinearLayout actions = new LinearLayout(this);
+        Button add = new Button(this);
+        add.setText("新增");
+        add.setOnClickListener(v -> promptProfileName("新建模式", "模式" + (profiles.size() + 1), name -> {
+            ConfigStore.addProfile(this, name);
+            buildUiRefresh();
+            restartAfterProfileChange();
+        }));
+        actions.addView(add, new LinearLayout.LayoutParams(0, dp(48), 1));
+        Button rename = new Button(this);
+        rename.setText("改名");
+        rename.setOnClickListener(v -> {
+            ConfigStore.Profile active = findProfile(profiles, activeId);
+            promptProfileName("重命名模式", active == null ? "模式" : active.name,
+                    name -> { ConfigStore.renameProfile(this, activeId, name); buildUiRefresh(); });
+        });
+        actions.addView(rename, new LinearLayout.LayoutParams(0, dp(48), 1));
+        Button delete = new Button(this);
+        delete.setText("删除");
+        delete.setOnClickListener(v -> {
+            if (profiles.size() <= 1) {
+                Toast.makeText(this, "至少保留一个模式", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            ConfigStore.Profile active = findProfile(profiles, activeId);
+            new AlertDialog.Builder(this).setTitle("删除模式")
+                    .setMessage("删除“" + (active == null ? "模式" : active.name) + "”？该模式的配置无法恢复。")
+                    .setNegativeButton("取消", null)
+                    .setPositiveButton("删除", (dialog, which) -> {
+                        ConfigStore.deleteProfile(this, activeId);
+                        buildUiRefresh();
+                        restartAfterProfileChange();
+                    }).show();
+        });
+        actions.addView(delete, new LinearLayout.LayoutParams(0, dp(48), 1));
+        content.addView(actions, matchWrap());
+        TextView hint = text("切换模式会自动重启悬浮球，让外观、手势和菜单配置生效。", 13, false);
+        content.addView(hint, matchWrap());
+    }
+
+    private ConfigStore.Profile findProfile(java.util.List<ConfigStore.Profile> profiles, String id) {
+        for (ConfigStore.Profile profile : profiles) if (profile.id.equals(id)) return profile;
+        return null;
+    }
+
+    private interface NameCallback { void onName(String name); }
+
+    private void promptProfileName(String title, String initial, NameCallback callback) {
+        android.widget.EditText input = new android.widget.EditText(this);
+        input.setSingleLine(true);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        input.setText(initial);
+        input.setSelection(input.getText().length());
+        new AlertDialog.Builder(this).setTitle(title).setView(input)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("保存", (dialog, which) -> callback.onName(input.getText().toString()))
+                .show();
+    }
+
+    private void restartAfterProfileChange() {
+        Toast.makeText(this, "模式已切换，正在重启悬浮球…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            try { FloatingBallRestarter.restart(); }
+            catch (Exception error) {
+                Log.e("FloatBallPlus", "Could not apply selected profile", error);
+                runOnUiThread(() -> Toast.makeText(this,
+                        "模式已保存；重启失败，请点击“重启悬浮球并应用设置”重试。", Toast.LENGTH_LONG).show());
+            }
+        }, "FloatBallPlus-profile-restart").start();
     }
 
     private void addRestartControl() {
@@ -210,20 +330,25 @@ public final class SettingsActivity extends Activity {
         row.setPadding(0, dp(5), 0, dp(5));
 
         TextView name = text(label, 16, false);
-        row.addView(name, new LinearLayout.LayoutParams(dp(94), LinearLayout.LayoutParams.WRAP_CONTENT));
+        row.addView(name, new LinearLayout.LayoutParams(dp(76), LinearLayout.LayoutParams.WRAP_CONTENT));
 
         TextView current = text(displayName(ConfigStore.get(this, key), key), 14, false);
         current.setTextColor(Color.DKGRAY);
         row.addView(current, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
 
         Button pick = new Button(this);
-        pick.setText("选择");
+        pick.setText("应用");
         pick.setOnClickListener(v -> {
             Intent intent = new Intent(this, AppPickerActivity.class);
             intent.putExtra(AppPickerActivity.EXTRA_CONFIG_KEY, key);
             startActivityForResult(intent, PICK_REQUEST);
         });
-        row.addView(pick, new LinearLayout.LayoutParams(dp(76), dp(48)));
+        row.addView(pick, new LinearLayout.LayoutParams(dp(66), dp(48)));
+
+        Button script = new Button(this);
+        script.setText("脚本");
+        script.setOnClickListener(v -> showScriptPicker(key));
+        row.addView(script, new LinearLayout.LayoutParams(dp(66), dp(48)));
 
         Button clear = new Button(this);
         clear.setText(key.startsWith("menu_app_") ? "清空" : "系统");
@@ -231,15 +356,43 @@ public final class SettingsActivity extends Activity {
             ConfigStore.put(this, key, "");
             current.setText(key.startsWith("menu_app_") ? "未配置" : "跟随系统");
         });
-        row.addView(clear, new LinearLayout.LayoutParams(dp(76), dp(48)));
+        row.addView(clear, new LinearLayout.LayoutParams(dp(66), dp(48)));
 
         content.addView(row, matchWrap());
     }
 
+    private void showScriptPicker(String key) {
+        java.util.List<ScriptStore.Script> scripts = ScriptStore.list(this);
+        if (scripts.isEmpty()) {
+            new AlertDialog.Builder(this).setTitle("还没有脚本")
+                    .setMessage("先从手机导入 .sh 脚本，再把它分配给此入口。")
+                    .setNegativeButton("取消", null)
+                    .setPositiveButton("导入脚本", (dialog, which) ->
+                            startActivity(new Intent(this, ScriptLibraryActivity.class))).show();
+            return;
+        }
+        String[] names = new String[scripts.size()];
+        for (int i = 0; i < scripts.size(); i++) names[i] = scripts.get(i).name;
+        new AlertDialog.Builder(this).setTitle("选择本地脚本")
+                .setItems(names, (dialog, which) -> {
+                    ConfigStore.put(this, key, ConfigStore.scriptAction(scripts.get(which).id));
+                    buildUiRefresh();
+                })
+                .setNeutralButton("管理脚本", (dialog, which) ->
+                        startActivity(new Intent(this, ScriptLibraryActivity.class)))
+                .show();
+    }
+
     private String displayName(String component, String key) {
         if (component == null || component.isEmpty()) return key.startsWith("menu_app_") ? "未配置" : "跟随系统";
+        if (ConfigStore.isScriptAction(component)) {
+            String id = ConfigStore.actionValue(component);
+            ScriptStore.Script script = ScriptStore.find(this, id);
+            return script == null ? "脚本不可用" : script.name;
+        }
         try {
-            android.content.ComponentName cn = android.content.ComponentName.unflattenFromString(component);
+            android.content.ComponentName cn = android.content.ComponentName.unflattenFromString(
+                    ConfigStore.actionValue(component));
             if (cn == null) return component;
             return getPackageManager().getActivityInfo(cn, 0).loadLabel(getPackageManager()).toString();
         } catch (PackageManager.NameNotFoundException e) {
@@ -253,7 +406,7 @@ public final class SettingsActivity extends Activity {
         if (requestCode != PICK_REQUEST || resultCode != RESULT_OK || data == null) return;
         String key = data.getStringExtra(AppPickerActivity.EXTRA_CONFIG_KEY);
         String component = data.getStringExtra(AppPickerActivity.EXTRA_COMPONENT);
-        ConfigStore.put(this, key, component);
+        ConfigStore.put(this, key, ConfigStore.appAction(component));
         buildUiRefresh();
     }
 

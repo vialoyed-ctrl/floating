@@ -1,4 +1,4 @@
 <resources>
     <string name="app_name">悬浮球增强</string>
-    <string name="module_description">为 ColorOS 悬浮球添加应用启动手势与菜单入口</string>
+    <string name="module_description">为 ColorOS 悬浮球添加手势、应用菜单、配置模式和本地脚本</string>
 </resources>

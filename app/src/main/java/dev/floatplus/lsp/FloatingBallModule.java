@@ -1,6 +1,8 @@
 package dev.floatplus.lsp;
 
 import dev.floatplus.lsp.config.ConfigStore;
+import dev.floatplus.lsp.config.ConfigProvider;
+import dev.floatplus.lsp.config.ScriptStore;
 import dev.floatplus.lsp.appearance.AssistiveTouchDrawable;
 import dev.floatplus.lsp.appearance.BallEdgeDocking;
 
@@ -19,6 +21,7 @@ import android.graphics.drawable.Drawable;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
+import android.os.Bundle;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.LayoutInflater;
@@ -99,8 +102,9 @@ public final class FloatingBallModule implements IXposedHookLoadPackage {
                             readConfig(context);
                             String component = CONFIG.get(key);
                             if (component == null || component.isEmpty()) return;
-
-                            if (launchComponent(context, component)) {
+                            if (ConfigStore.isScriptAction(component)) {
+                                if (runConfiguredScript(context, component)) param.setResult(null);
+                            } else if (launchComponent(context, ConfigStore.actionValue(component))) {
                                 param.setResult(null);
                             }
                         }
@@ -243,7 +247,7 @@ public final class FloatingBallModule implements IXposedHookLoadPackage {
                     }
                 }
             });
-            log("Hooked ColorOS ball image and background updates (0.2.14)", null);
+            log("Hooked ColorOS ball image and background updates (0.3.0)", null);
         } catch (Throwable t) {
             log("Could not hook ColorOS ball drawable updates", t);
         }
@@ -531,7 +535,7 @@ public final class FloatingBallModule implements IXposedHookLoadPackage {
         button.setOrientation(LinearLayout.VERTICAL);
         button.setGravity(Gravity.CENTER);
         button.setTag(MENU_VIEW_TAG);
-        button.setContentDescription("搴旂敤");
+        button.setContentDescription("应用");
         GradientDrawable background = new GradientDrawable();
         background.setShape(GradientDrawable.OVAL);
         background.setColor(Color.WHITE);
@@ -545,7 +549,7 @@ public final class FloatingBallModule implements IXposedHookLoadPackage {
         button.addView(icon, new LinearLayout.LayoutParams(dp(context, 24), dp(context, 24)));
 
         TextView label = new TextView(context);
-        label.setText("搴旂敤");
+        label.setText("应用");
         label.setTextColor(Color.rgb(40, 48, 64));
         label.setTextSize(10);
         label.setGravity(Gravity.CENTER);
@@ -573,13 +577,14 @@ public final class FloatingBallModule implements IXposedHookLoadPackage {
         panel.setElevation(dp(context, 12));
 
         TextView title = new TextView(context);
-        title.setText("搴旂敤");
+        title.setText("应用");
         title.setTextSize(16);
         title.setTypeface(null, Typeface.BOLD);
         title.setTextColor(Color.rgb(32, 38, 48));
         title.setPadding(dp(context, 10), dp(context, 8), dp(context, 10), dp(context, 8));
         panel.addView(title, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        PopupWindow[] popupHandle = new PopupWindow[1];
         int rowHeight = dp(context, 52);
         for (AppEntry entry : entries) {
             LinearLayout row = new LinearLayout(context);
@@ -597,7 +602,9 @@ public final class FloatingBallModule implements IXposedHookLoadPackage {
             name.setPadding(dp(context, 12), 0, 0, 0);
             row.addView(name, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
             row.setOnClickListener(v -> {
-                launchComponent(context, entry.component.flattenToString());
+                if (popupHandle[0] != null) popupHandle[0].dismiss();
+                if (entry.scriptId != null) runConfiguredScript(context, ConfigStore.scriptAction(entry.scriptId));
+                else if (entry.component != null) launchComponent(context, entry.component.flattenToString());
             });
             panel.addView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, rowHeight));
         }
@@ -605,6 +612,7 @@ public final class FloatingBallModule implements IXposedHookLoadPackage {
         int screenWidth = context.getResources().getDisplayMetrics().widthPixels;
         int popupWidth = Math.min(dp(context, 280), screenWidth - dp(context, 32));
         PopupWindow popup = new PopupWindow(panel, popupWidth, ViewGroup.LayoutParams.WRAP_CONTENT, true);
+        popupHandle[0] = popup;
         popup.setBackgroundDrawable(panelBackground);
         popup.setOutsideTouchable(true);
         popup.setElevation(dp(context, 12));
@@ -634,6 +642,15 @@ public final class FloatingBallModule implements IXposedHookLoadPackage {
         for (int slot = 1; slot <= 5; slot++) {
             String componentString = CONFIG.get("menu_app_" + slot);
             if (componentString == null || componentString.isEmpty()) continue;
+            if (ConfigStore.isScriptAction(componentString)) {
+                String scriptId = ConfigStore.actionValue(componentString);
+                ScriptStore.Script script = findConfiguredScript(scriptId);
+                if (script == null) continue;
+                Drawable icon = context.getDrawable(android.R.drawable.ic_media_play);
+                result.add(new AppEntry(null, script.name, icon, scriptId));
+                continue;
+            }
+            componentString = ConfigStore.actionValue(componentString);
             ComponentName component = ComponentName.unflattenFromString(componentString);
             if (component == null) continue;
             try {
@@ -641,12 +658,40 @@ public final class FloatingBallModule implements IXposedHookLoadPackage {
                 if (!info.enabled) continue;
                 CharSequence label = info.loadLabel(pm);
                 Drawable icon = info.loadIcon(pm);
-                result.add(new AppEntry(component, label == null ? component.getPackageName() : label.toString(), icon));
+                result.add(new AppEntry(component, label == null ? component.getPackageName() : label.toString(), icon, null));
             } catch (PackageManager.NameNotFoundException ignored) {
                 // An app may have been uninstalled since the user selected it.
             }
         }
         return result;
+    }
+
+    private static ScriptStore.Script findConfiguredScript(String id) {
+        for (ScriptStore.Script script : ScriptStore.decode(CONFIG.get(ScriptStore.LIBRARY_COLUMN))) {
+            if (script.id.equals(id)) return script;
+        }
+        return null;
+    }
+
+    private static boolean runConfiguredScript(Context context, String action) {
+        if (!ConfigStore.isScriptAction(action)) return false;
+        String id = ConfigStore.actionValue(action);
+        ScriptStore.Script script = findConfiguredScript(id);
+        if (script == null) {
+            log("Configured shell script is missing: " + id, null);
+            return false;
+        }
+        try {
+            Bundle request = new Bundle();
+            request.putString(ConfigProvider.SCRIPT_ID_ARGUMENT, id);
+            Bundle result = context.getContentResolver().call(
+                    android.net.Uri.parse("content://" + ConfigProvider.AUTHORITY + "/script-run"),
+                    ConfigProvider.RUN_SCRIPT_METHOD, null, request);
+            return result != null && result.getBoolean("started", false);
+        } catch (Throwable error) {
+            log("Could not request a script run from the module provider", error);
+            return false;
+        }
     }
 
     private static boolean launchComponent(Context context, String componentString) {
@@ -671,7 +716,8 @@ public final class FloatingBallModule implements IXposedHookLoadPackage {
         if (context == null) return false;
         String[] keys = new String[]{"gesture_single", "gesture_double", "gesture_long",
                 ConfigStore.BALL_SIZE_PERCENT, ConfigStore.BALL_STYLE, ConfigStore.BALL_OPACITY_PERCENT,
-                "menu_app_1", "menu_app_2", "menu_app_3", "menu_app_4", "menu_app_5"};
+                "menu_app_1", "menu_app_2", "menu_app_3", "menu_app_4", "menu_app_5",
+                ScriptStore.LIBRARY_COLUMN};
         if (!configLoaded) {
             for (String key : keys) CONFIG.put(key, defaultConfigValue(key));
         }
@@ -725,6 +771,7 @@ public final class FloatingBallModule implements IXposedHookLoadPackage {
         if (ConfigStore.BALL_SIZE_PERCENT.equals(key)) return Integer.toString(ConfigStore.DEFAULT_SIZE_PERCENT);
         if (ConfigStore.BALL_STYLE.equals(key)) return ConfigStore.STYLE_IOS;
         if (ConfigStore.BALL_OPACITY_PERCENT.equals(key)) return Integer.toString(ConfigStore.DEFAULT_OPACITY_PERCENT);
+        if (ScriptStore.LIBRARY_COLUMN.equals(key)) return "[]";
         return "";
     }
 
@@ -744,11 +791,13 @@ public final class FloatingBallModule implements IXposedHookLoadPackage {
         final ComponentName component;
         final String label;
         final Drawable icon;
+        final String scriptId;
 
-        AppEntry(ComponentName component, String label, Drawable icon) {
+        AppEntry(ComponentName component, String label, Drawable icon, String scriptId) {
             this.component = component;
             this.label = label;
             this.icon = icon;
+            this.scriptId = scriptId;
         }
     }
 }
