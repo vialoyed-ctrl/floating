@@ -166,7 +166,7 @@ public final class SettingsActivity extends Activity {
         });
         actions.addView(delete, new LinearLayout.LayoutParams(0, dp(48), 1));
         content.addView(actions, matchWrap());
-        TextView hint = text("切换模式会自动重启悬浮球，让外观、手势和菜单配置生效。", 13, false);
+        TextView hint = text("模式1和模式2也可添加到快捷设置磁贴；点按磁贴切换并重启悬浮球。", 13, false);
         content.addView(hint, matchWrap());
     }
 
